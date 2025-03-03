@@ -39,27 +39,12 @@ function App() {
 
   const renderSearchResult = () => {
     if (!searchResult) return null;
-    
-    const fieldsMatch = searchResult.sql.match(/SELECT (.*?) FROM/);
-    if (!fieldsMatch) return null;
-    
-    const fields = fieldsMatch[1].split(',').map(field => {
-      const asMatch = field.trim().match(/(.*?) as (.*)/);
-      return asMatch ? asMatch[2].replace(/['"]/g, '') : field.trim();
-    });
-
-    const fieldDescriptions = {
-      'name': 'Full name of the candidate',
-      'experience': 'Years of work experience',
-      'introduction': 'Self introduction and background',
-      'skills': 'Technical skills and expertise',
-      'job_preference': 'Preferred employment type (Full-time/Part-time)'
-    };
 
     return (
       <div className="result-container">
         <div className="result-header">
           <h2>Search Results</h2>
+          <p className="search-query">Search: {searchResult.requirement}</p>
         </div>
 
         {searchResult.results.length === 0 ? (
