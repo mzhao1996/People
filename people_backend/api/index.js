@@ -7,7 +7,11 @@ const app = express();
 app.use(cors({
   origin: process.env.VERCEL_ENV === 'production' 
     ? ['https://people-hn5c.vercel.app'] 
-    : '*'
+    : '*',
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type'],
+  credentials: false,
+  optionsSuccessStatus: 204
 }));
 
 app.use(express.json());
