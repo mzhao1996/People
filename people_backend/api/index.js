@@ -7,7 +7,7 @@ const app = express();
 // Enable CORS for all routes
 app.use(cors({
   origin: process.env.VERCEL_ENV === 'production' 
-    ? ['https://people-hn5c.vercel.app/'] 
+    ? ['https://people-hn5c.vercel.app'] 
     : '*'
 }));
 
