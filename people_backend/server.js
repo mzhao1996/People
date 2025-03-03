@@ -1,18 +1,19 @@
 const express = require('express');
-const cors = require('cors');//only for testing in local
+const cors = require('cors');
 const sqlite3 = require('sqlite3').verbose();
 const app = express();
 
-const PORT = 3000;
-const DB_PATH = './candidates.db';
+// 在 Vercel 环境中使用内存数据库
+const VERCEL_ENV = process.env.VERCEL_ENV;
+const DB_PATH = VERCEL_ENV ? ':memory:' : './candidates.db';
 
-// Create database connection
+// 创建数据库连接
 const db = new sqlite3.Database(DB_PATH, (err) => {
     if (err) {
         console.error('Database connection error:', err.message);
     } else {
         console.log('Connected to SQLite database');
-        // Read and execute initialization SQL file
+        // 读取并执行初始化 SQL 文件
         const fs = require('fs');
         const initSQL = fs.readFileSync('./mock_data.sql', 'utf8');
         db.exec(initSQL, (err) => {
@@ -25,10 +26,18 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
     }
 });
 
-//only for testing in local
-app.use(cors());
+// CORS 配置
+const corsOptions = {
+    origin: process.env.VERCEL_ENV 
+        ? ['https://people-utec.vercel.app/']
+        : ['http://localhost:5173'],
+    methods: ['GET', 'POST'],
+    allowedHeaders: ['Content-Type']
+};
 
+app.use(cors(corsOptions));
 app.use(express.json());
+
 app.get('/', (req, res) => {
     res.send('server is running');
 });
@@ -117,13 +126,13 @@ function convertToSQL(requirement) {
     return sql;
 }
 
-app.post('/people', (req, res) => {
+app.post('/api/people', (req, res) => {
     try {
         const { requirement } = req.body;
         console.log('rawRequirement:', requirement);
         const sqlQuery = convertToSQL(requirement);
         
-        // Execute SQL query
+        // 执行 SQL 查询
         db.all(sqlQuery, [], (err, rows) => {
             if (err) {
                 console.error('Query error:', err);
@@ -143,9 +152,21 @@ app.post('/people', (req, res) => {
     }
 });
 
-app.listen(PORT, () => {
-    console.log(`Server is running at http://localhost:${PORT}`);
+
+app.get('/api/health', (req, res) => {
+    res.json({ status: 'healthy' });
 });
+
+
+if (!VERCEL_ENV) {
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, () => {
+        console.log(`Server is running at http://localhost:${PORT}`);
+    });
+}
+
+
+module.exports = app;
 
 // Close database connection when application shuts down
 process.on('SIGINT', () => {
