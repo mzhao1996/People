@@ -1,5 +1,6 @@
 const path = require('path');
 const app = require(path.join(__dirname, 'api', 'index.js'));
+require('dotenv').config();
 
 const PORT = process.env.PORT || 3000;
 

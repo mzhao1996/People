@@ -1,7 +1,12 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-
+const { createClient } = require('@supabase/supabase-js');
 const app = express();
+
+const supabaseUrl = 'https://bgazjhpkmetpsxlrukgr.supabase.co'
+const supabaseKey = process.env.SUPABASE_KEY
+const supabase = createClient(supabaseUrl, supabaseKey)
 
 // Enable CORS for all routes
 app.use(cors({
@@ -16,157 +21,113 @@ app.use(cors({
 
 app.use(express.json());
 
-// Mock data
-const CANDIDATES = [
-  {
-    name: 'Alex Thompson',
-    experience: 5,
-    introduction: 'Passionate software developer with a focus on web technologies',
-    skills: 'JavaScript, React, Node.js, Python',
-    job_preference: 'full-time'
-  },
-  {
-    name: 'Sarah Chen',
-    experience: 3,
-    introduction: 'Creative full-stack developer with strong problem-solving skills',
-    skills: 'Python, Django, PostgreSQL, AWS',
-    job_preference: 'full-time'
-  },
-  {
-    name: 'Michael Rodriguez',
-    experience: 7,
-    introduction: 'Senior developer specialized in cloud architecture',
-    skills: 'AWS, Docker, Kubernetes, Java',
-    job_preference: 'full-time'
-  },
-  {
-    name: 'Emma Wilson',
-    experience: 2,
-    introduction: 'Frontend developer with an eye for design',
-    skills: 'HTML, CSS, JavaScript, Vue.js',
-    job_preference: 'part-time'
-  },
-  {
-    name: 'James Lee',
-    experience: 4,
-    introduction: 'Backend developer with expertise in microservices',
-    skills: 'Java, Spring Boot, MySQL, Redis',
-    job_preference: 'full-time'
-  },
-  {
-    name: 'David Miller',
-    experience: 6,
-    introduction: 'DevOps engineer with strong automation skills',
-    skills: 'Jenkins, Terraform, Ansible, Python',
-    job_preference: 'full-time'
-  },
-  {
-    name: 'Lisa Wang',
-    experience: 8,
-    introduction: 'Technical architect with extensive enterprise experience',
-    skills: 'Java, C++, System Design, Cloud Architecture',
-    job_preference: 'full-time'
-  },
-  {
-    name: 'Robert Taylor',
-    experience: 1,
-    introduction: 'Junior developer eager to learn and grow',
-    skills: 'JavaScript, HTML, CSS, React',
-    job_preference: 'full-time'
-  },
-  {
-    name: 'Jennifer Park',
-    experience: 4,
-    introduction: 'Mobile app developer with iOS expertise',
-    skills: 'Swift, Objective-C, Firebase',
-    job_preference: 'part-time'
-  },
-  {
-    name: 'William Brown',
-    experience: 5,
-    introduction: 'Full-stack developer focused on scalable solutions',
-    skills: 'Node.js, MongoDB, React, TypeScript',
-    job_preference: 'full-time'
-  }
-];
-
-// Search function
-function searchCandidates(requirement) {
+// 搜索函数
+async function searchCandidates(requirement) {
   const cleanedReq = requirement.toString().toLowerCase().trim();
-  let results = [...CANDIDATES];
+  let query = supabase.from('jobseekers').select('*');
 
-  // Filter by experience
-  if (cleanedReq.includes('experience') || cleanedReq.includes('years') || cleanedReq.includes('year')) {
-    if (cleanedReq.includes('less than')) {
-      const expMatch = cleanedReq.match(/(\d+)\s*(?:years?|experience)/);
-      if (expMatch) {
-        results = results.filter(candidate => candidate.experience <= parseInt(expMatch[1]));
-      }
-    } else {
-      const expMatch = cleanedReq.match(/(\d+)[\+]?\s*(?:years?|experience)/);
-      if (expMatch) {
-        results = results.filter(candidate => candidate.experience >= parseInt(expMatch[1]));
+  // 按年龄筛选
+  if (cleanedReq.includes('age')) {
+    const ageMatch = cleanedReq.match(/(\d+)\s*(?:years?\s+old|age)/);
+    if (ageMatch) {
+      if (cleanedReq.includes('less than')) {
+        query = query.lte('age', parseInt(ageMatch[1]));
+      } else if (cleanedReq.includes('more than') || cleanedReq.includes('over')) {
+        query = query.gte('age', parseInt(ageMatch[1]));
+      } else {
+        query = query.eq('age', parseInt(ageMatch[1]));
       }
     }
   }
 
-  // Filter by skills
+  // 按工作经验筛选（通过 work_start_date 计算）
+  if (cleanedReq.includes('experience') || (cleanedReq.includes('year') && !cleanedReq.includes('years old'))) {
+    const expMatch = cleanedReq.match(/(\d+)\s*(?:years?|experience)/);
+    if (expMatch) {
+      const yearsOfExperience = parseInt(expMatch[1]);
+      const cutoffDate = new Date();
+      cutoffDate.setFullYear(cutoffDate.getFullYear() - yearsOfExperience);
+      
+      if (cleanedReq.includes('less than')) {
+        query = query.gt('work_start_date', cutoffDate.toISOString());
+      } else {
+        query = query.lte('work_start_date', cutoffDate.toISOString());
+      }
+    }
+  }
+
+  // 按技能筛选
   if (cleanedReq.includes('skill') || cleanedReq.includes('know')) {
     const skillMatch = cleanedReq.match(/(?:skill|know)[s\s]+(?:in|with|of)?\s+([a-zA-Z\+\#\.]+)/);
     if (skillMatch) {
       const skill = skillMatch[1].toLowerCase();
-      results = results.filter(candidate => 
-        candidate.skills.toLowerCase().includes(skill)
-      );
+      query = query.ilike('skills', `%${skill}%`);
     }
   } else {
     const techKeywords = ['java', 'python', 'javascript', 'nodejs', 'react', 'angular', 'vue', 'c++', 'ruby', 'php', 'aws', 'docker', 'kubernetes', 'devops'];
     for (const keyword of techKeywords) {
       if (cleanedReq.includes(keyword)) {
-        results = results.filter(candidate => 
-          candidate.skills.toLowerCase().includes(keyword) || 
-          candidate.introduction.toLowerCase().includes(keyword)
-        );
+        query = query.or(`skills.ilike.%${keyword}%,responsibilities.ilike.%${keyword}%`);
+        break;
       }
     }
   }
 
-  // Filter by job preference
-  if (cleanedReq.includes('full-time') || cleanedReq.includes('full time')) {
-    results = results.filter(candidate => candidate.job_preference === 'full-time');
-  } else if (cleanedReq.includes('part-time') || cleanedReq.includes('part time')) {
-    results = results.filter(candidate => candidate.job_preference === 'part-time');
-  }
-
-  // Filter by name
+  // 按姓名筛选
   if (cleanedReq.includes('named') || cleanedReq.includes('name is')) {
     const nameMatch = cleanedReq.match(/(?:named|name is)\s+([a-zA-Z]+)/);
     if (nameMatch) {
       const name = nameMatch[1].toLowerCase();
-      results = results.filter(candidate => 
-        candidate.name.toLowerCase().includes(name)
-      );
+      query = query.or(`first_name.ilike.%${name}%,last_name.ilike.%${name}%`);
     }
   }
 
-  // Filter by background keywords
-  const backgroundKeywords = ['architect', 'senior', 'junior', 'lead', 'frontend', 'backend', 'full-stack', 'mobile'];
-  for (const keyword of backgroundKeywords) {
+  // 按学历筛选
+  const educationKeywords = ['bachelor', 'master', 'phd', 'doctorate'];
+  for (const keyword of educationKeywords) {
     if (cleanedReq.includes(keyword)) {
-      results = results.filter(candidate => 
-        candidate.introduction.toLowerCase().includes(keyword)
-      );
+      query = query.ilike('degree', `%${keyword}%`);
+      break;
     }
   }
 
-  // Sort by experience (default descending)
-  if (!cleanedReq.includes('ascending') && !cleanedReq.includes('asc')) {
-    results.sort((a, b) => b.experience - a.experience);
-  } else {
-    results.sort((a, b) => a.experience - b.experience);
+  // 按专业筛选
+  const majorKeywords = ['computer science', 'engineering', 'business', 'mathematics', 'physics'];
+  for (const keyword of majorKeywords) {
+    if (cleanedReq.includes(keyword)) {
+      query = query.ilike('major', `%${keyword}%`);
+      break;
+    }
   }
 
-  return results;
+  // 按国籍筛选
+  if (cleanedReq.includes('nationality')) {
+    const nationalityMatch = cleanedReq.match(/nationality\s+(?:is\s+)?([a-zA-Z]+)/);
+    if (nationalityMatch) {
+      query = query.ilike('nationality', `%${nationalityMatch[1]}%`);
+    }
+  }
+
+  // 按工作职位筛选
+  const positionKeywords = ['engineer', 'developer', 'manager', 'architect', 'designer'];
+  for (const keyword of positionKeywords) {
+    if (cleanedReq.includes(keyword)) {
+      query = query.ilike('position', `%${keyword}%`);
+      break;
+    }
+  }
+
+  // 默认按工作开始日期排序（经验）
+  query = query.order('work_start_date', { ascending: cleanedReq.includes('ascending') });
+
+  const { data, error } = await query;
+  
+  if (error) {
+    console.error('Supabase query error:', error);
+    throw error;
+  }
+
+  return data;
 }
 
 // Health check endpoint
@@ -175,17 +136,16 @@ app.get('/', (req, res) => {
 });
 
 // Search endpoint
-app.post('/people', (req, res) => {
+app.post('/people', async (req, res) => {
   try {
     const { requirement } = req.body;
-    console.log('rawRequirement:', requirement);
-    
-    const results = searchCandidates(requirement);
-    
+    //console.log('rawRequirement:', requirement);
+    const results = await searchCandidates(requirement);
     res.json({ 
       requirement: requirement,
       results: results
     });
+    //console.log('results:', results);
   } catch (error) {
     console.error('server error:', error);
     res.status(500).json({ error: error.message || 'server side error' });
