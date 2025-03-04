@@ -4,9 +4,11 @@ const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
 const app = express();
 
-const supabaseUrl = 'https://bgazjhpkmetpsxlrukgr.supabase.co'
-const supabaseKey = process.env.SUPABASE_KEY
-const supabase = createClient(supabaseUrl, supabaseKey)
+// 使用 Vercel 环境变量
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://bgazjhpkmetpsxlrukgr.supabase.co',
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_KEY
+)
 
 // Enable CORS for all routes
 app.use(cors({
