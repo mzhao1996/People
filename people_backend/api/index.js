@@ -2,15 +2,18 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
+const natural = require('natural');
+const tokenizer = new natural.WordTokenizer();
+const classifier = new natural.BayesClassifier();
 const app = express();
 
-// 使用 Vercel 环境变量
+
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://bgazjhpkmetpsxlrukgr.supabase.co',
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_KEY
 )
 
-// Enable CORS for all routes
+
 app.use(cors({
   origin: process.env.VERCEL_ENV === 'production' 
     ? ['https://people-hn5c.vercel.app'] 
@@ -23,121 +26,255 @@ app.use(cors({
 
 app.use(express.json());
 
-// 搜索函数
+// Add synonym support
+const synonyms = {
+  gender: ['gender', 'sex', 'male', 'female'],
+  education: ['education', 'degree', 'graduated', 'study', 'studied'],
+  university: ['university', 'college', 'school', 'institute'],
+  gpa: ['gpa', 'grade', 'score'],
+  company: ['company', 'organization', 'firm', 'workplace'],
+  nationality: ['nationality', 'citizen', 'citizenship'],
+  location: ['address', 'location', 'city', 'country', 'live', 'living'],
+  contact: ['contact', 'phone', 'email', 'reach'],
+  graduate: ['graduate', 'graduated', 'graduation'],
+  current: ['current', 'currently', 'now', 'present']
+};
+
+// Add degree levels
+const degreeTypes = ['bachelor', 'master', 'phd', 'doctorate', 'undergraduate', 'postgraduate'];
+
+// Add common majors
+const majors = [
+  'computer science', 'software engineering', 'information technology', 
+  'electrical engineering', 'mechanical engineering', 'business administration',
+  'finance', 'mathematics', 'physics', 'chemistry', 'biology'
+];
+
 async function searchCandidates(requirement) {
-  const cleanedReq = requirement.toString().toLowerCase().trim();
+  const tokens = tokenizer.tokenize(requirement.toLowerCase());
+  
+  // Initialize query
   let query = supabase.from('jobseekers').select('*');
-
-  // 按年龄筛选
-  if (cleanedReq.includes('age')) {
-    const ageMatch = cleanedReq.match(/(\d+)\s*(?:years?\s+old|age)/);
-    if (ageMatch) {
-      if (cleanedReq.includes('less than')) {
-        query = query.lte('age', parseInt(ageMatch[1]));
-      } else if (cleanedReq.includes('more than') || cleanedReq.includes('over')) {
-        query = query.gte('age', parseInt(ageMatch[1]));
-      } else {
-        query = query.eq('age', parseInt(ageMatch[1]));
+  
+  // Extended entity recognition
+  const entities = {
+    age: null,
+    experience: null,
+    skills: [],
+    education: null,
+    position: null,
+    comparison: null,
+    gender: null,
+    university: null,
+    major: null,
+    gpa: null,
+    company: null,
+    nationality: null,
+    location: null,
+    graduationYear: null,
+    currentlyEmployed: false,
+    contactInfo: null,
+    name: null
+  };
+  
+  // Analyze comparison words
+  if (tokens.includes('less') || tokens.includes('under') || tokens.includes('below')) {
+    entities.comparison = 'less';
+  } else if (tokens.includes('more') || tokens.includes('over') || tokens.includes('above')) {
+    entities.comparison = 'more';
+  } else if (tokens.includes('equal') || tokens.includes('exactly')) {
+    entities.comparison = 'equal';
+  }
+  
+  // Extract numbers
+  const numbers = tokens.filter(token => /\d+/.test(token));
+  
+  // Context analysis
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    const prevToken = tokens[i - 1];
+    const nextToken = tokens[i + 1];
+    
+    // Gender analysis
+    if (token === 'male' || token === 'female') {
+      entities.gender = token;
+    }
+    
+    // Name analysis
+    if (token === 'named' || token === 'name') {
+      let nameTokens = [];
+      let j = i + 1;
+      while (j < tokens.length && !/^(with|has|and|or)$/.test(tokens[j])) {
+        nameTokens.push(tokens[j]);
+        j++;
+      }
+      entities.name = nameTokens.join(' ');
+    }
+    
+    // Education analysis
+    if (degreeTypes.includes(token)) {
+      entities.education = token;
+    }
+    
+    // Major analysis
+    majors.forEach(major => {
+      if (requirement.toLowerCase().includes(major)) {
+        entities.major = major;
+      }
+    });
+    
+    // GPA analysis
+    if (token === 'gpa') {
+      if (nextToken && /\d+(\.\d+)?/.test(nextToken)) {
+        entities.gpa = parseFloat(nextToken);
+      }
+    }
+    
+    // Nationality analysis
+    if (synonyms.nationality.includes(token) && nextToken) {
+      entities.nationality = nextToken;
+    }
+    
+    // Current employment status analysis
+    if (synonyms.current.includes(token) && 
+        (tokens.includes('working') || tokens.includes('employed'))) {
+      entities.currentlyEmployed = true;
+    }
+    
+    // Graduation year analysis
+    if (synonyms.graduate.includes(token)) {
+      const yearMatch = requirement.match(/\b(19|20)\d{2}\b/);
+      if (yearMatch) {
+        entities.graduationYear = parseInt(yearMatch[0]);
+      }
+    }
+    
+    // Age analysis
+    if (token === 'age' || token === 'years' && nextToken === 'old') {
+      entities.age = numbers[0];
+    }
+    
+    // Experience analysis
+    if (token === 'experience' || (token === 'years' && prevToken && /\d+/.test(prevToken))) {
+      entities.experience = numbers[0];
+    }
+    
+    // Skills analysis
+    if (token === 'skill' || token === 'skills' || token === 'know') {
+      let j = i + 1;
+      while (j < tokens.length && !['in', 'with', 'and'].includes(tokens[j])) {
+        if (!/^(the|a|an)$/.test(tokens[j])) {
+          entities.skills.push(tokens[j]);
+        }
+        j++;
       }
     }
   }
-
-  // 按工作经验筛选（通过 work_start_date 计算）
-  if (cleanedReq.includes('experience') || (cleanedReq.includes('year') && !cleanedReq.includes('years old'))) {
-    const expMatch = cleanedReq.match(/(\d+)\s*(?:years?|experience)/);
-    if (expMatch) {
-      const yearsOfExperience = parseInt(expMatch[1]);
-      const cutoffDate = new Date();
-      cutoffDate.setFullYear(cutoffDate.getFullYear() - yearsOfExperience);
-      
-      if (cleanedReq.includes('less than')) {
-        query = query.gt('work_start_date', cutoffDate.toISOString());
-      } else {
-        query = query.lte('work_start_date', cutoffDate.toISOString());
-      }
+  
+  // Apply query conditions
+  if (entities.gender) {
+    query = query.eq('gender', entities.gender);
+  }
+  
+  if (entities.name) {
+    query = query.or(`first_name.ilike.%${entities.name}%,last_name.ilike.%${entities.name}%`);
+  }
+  
+  if (entities.education) {
+    query = query.ilike('degree', `%${entities.education}%`);
+  }
+  
+  if (entities.major) {
+    query = query.ilike('major', `%${entities.major}%`);
+  }
+  
+  if (entities.gpa) {
+    if (entities.comparison === 'less') {
+      query = query.lt('gpa', entities.gpa);
+    } else if (entities.comparison === 'more') {
+      query = query.gt('gpa', entities.gpa);
+    } else {
+      query = query.gte('gpa', entities.gpa);
     }
   }
-
-  // 按技能筛选
-  if (cleanedReq.includes('skill') || cleanedReq.includes('know')) {
-    const skillMatch = cleanedReq.match(/(?:skill|know)[s\s]+(?:in|with|of)?\s+([a-zA-Z\+\#\.]+)/);
-    if (skillMatch) {
-      const skill = skillMatch[1].toLowerCase();
-      query = query.ilike('skills', `%${skill}%`);
-    }
-  } else {
-    const techKeywords = ['java', 'python', 'javascript', 'nodejs', 'react', 'angular', 'vue', 'c++', 'ruby', 'php', 'aws', 'docker', 'kubernetes', 'devops'];
-    for (const keyword of techKeywords) {
-      if (cleanedReq.includes(keyword)) {
-        query = query.or(`skills.ilike.%${keyword}%,responsibilities.ilike.%${keyword}%`);
-        break;
-      }
+  
+  if (entities.nationality) {
+    query = query.ilike('nationality', `%${entities.nationality}%`);
+  }
+  
+  if (entities.graduationYear) {
+    const gradDate = new Date(entities.graduationYear, 11, 31).toISOString();
+    query = query.lte('education_end_date', gradDate);
+  }
+  
+  if (entities.currentlyEmployed) {
+    query = query.is('work_end_date', null);
+  }
+  
+  if (entities.age) {
+    if (entities.comparison === 'less') {
+      query = query.lte('age', parseInt(entities.age));
+    } else if (entities.comparison === 'more') {
+      query = query.gte('age', parseInt(entities.age));
+    } else {
+      query = query.eq('age', parseInt(entities.age));
     }
   }
-
-  // 按姓名筛选
-  if (cleanedReq.includes('named') || cleanedReq.includes('name is')) {
-    const nameMatch = cleanedReq.match(/(?:named|name is)\s+([a-zA-Z]+)/);
-    if (nameMatch) {
-      const name = nameMatch[1].toLowerCase();
-      query = query.or(`first_name.ilike.%${name}%,last_name.ilike.%${name}%`);
+  
+  if (entities.experience) {
+    const cutoffDate = new Date();
+    cutoffDate.setFullYear(cutoffDate.getFullYear() - parseInt(entities.experience));
+    
+    if (entities.comparison === 'less') {
+      query = query.gt('work_start_date', cutoffDate.toISOString());
+    } else {
+      query = query.lte('work_start_date', cutoffDate.toISOString());
     }
   }
-
-  // 按学历筛选
-  const educationKeywords = ['bachelor', 'master', 'phd', 'doctorate'];
-  for (const keyword of educationKeywords) {
-    if (cleanedReq.includes(keyword)) {
-      query = query.ilike('degree', `%${keyword}%`);
+  
+  if (entities.skills.length > 0) {
+    entities.skills.forEach(skill => {
+      query = query.or(`skills.ilike.%${skill}%,responsibilities.ilike.%${skill}%`);
+    });
+  }
+  
+  // Add sorting options
+  const sortOptions = {
+    'experience': 'work_start_date',
+    'age': 'birth_date',
+    'education': 'education_end_date',
+    'gpa': 'gpa'
+  };
+  
+  // Determine sort field
+  let sortField = 'work_start_date'; // Default sort by work experience
+  for (const [key, field] of Object.entries(sortOptions)) {
+    if (tokens.includes(`sort by ${key}`) || tokens.includes(`order by ${key}`)) {
+      sortField = field;
       break;
     }
   }
-
-  // 按专业筛选
-  const majorKeywords = ['computer science', 'engineering', 'business', 'mathematics', 'physics'];
-  for (const keyword of majorKeywords) {
-    if (cleanedReq.includes(keyword)) {
-      query = query.ilike('major', `%${keyword}%`);
-      break;
-    }
-  }
-
-  // 按国籍筛选
-  if (cleanedReq.includes('nationality')) {
-    const nationalityMatch = cleanedReq.match(/nationality\s+(?:is\s+)?([a-zA-Z]+)/);
-    if (nationalityMatch) {
-      query = query.ilike('nationality', `%${nationalityMatch[1]}%`);
-    }
-  }
-
-  // 按工作职位筛选
-  const positionKeywords = ['engineer', 'developer', 'manager', 'architect', 'designer'];
-  for (const keyword of positionKeywords) {
-    if (cleanedReq.includes(keyword)) {
-      query = query.ilike('position', `%${keyword}%`);
-      break;
-    }
-  }
-
-  // 默认按工作开始日期排序（经验）
-  query = query.order('work_start_date', { ascending: cleanedReq.includes('ascending') });
-
+  
+  // Determine sort direction
+  const isAscending = tokens.includes('ascending') || tokens.includes('asc');
+  query = query.order(sortField, { ascending: isAscending });
+  
   const { data, error } = await query;
   
   if (error) {
     console.error('Supabase query error:', error);
     throw error;
   }
-
+  
   return data;
 }
 
-// Health check endpoint
+
 app.get('/', (req, res) => {
   res.json({ status: 'ok', message: 'API is running' });
 });
 
-// Search endpoint
+
 app.post('/people', async (req, res) => {
   try {
     const { requirement } = req.body;
@@ -154,5 +291,6 @@ app.post('/people', async (req, res) => {
   }
 });
 
-// Export the Express API
+
+module.exports = app; 
 module.exports = app; 
